@@ -2,7 +2,7 @@ import json
 import logging
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
 from ..models.webhook import (
     NotionEventPayload,
@@ -201,8 +201,30 @@ async def handle_notion_event(
     return NotionWebhookResponse(success=True, message=message)
 
 
+def enqueue_event_processing(
+    event: NotionEventPayload,
+    raw_event: Optional[Dict[str, Any]] = None,
+):
+    """Background task entry point executed by Starlette."""
+
+    import asyncio
+
+    async def runner():
+        try:
+            await handle_notion_event(event, raw_event)
+        except Exception as exc:  # pragma: no cover - best effort logging
+            logger.error(
+                "Background processing failed for %s %s: %s",
+                event.entity_type,
+                event.entity_id,
+                exc,
+            )
+
+    asyncio.run(runner())
+
+
 @router.post("/notion", response_model=NotionWebhookResponse)
-async def handle_notion_webhook(request: Request):
+async def handle_notion_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     Handle webhooks from Notion.
 
@@ -269,8 +291,8 @@ async def handle_notion_webhook(request: Request):
             errors.append(str(exc))
             continue
 
-        result = await handle_notion_event(event, raw_event)
-        messages.append(result.message)
+        background_tasks.add_task(enqueue_event_processing, event, raw_event)
+        messages.append(f"Event {event.event_type} queued")
 
     if not messages:
         detail = "Failed to process webhook"
