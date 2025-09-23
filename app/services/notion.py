@@ -14,21 +14,32 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 NOTION_API_URL = "https://api.notion.com/v1"
 
-_client_var: ContextVar[Optional[httpx.AsyncClient]] = ContextVar("notion_http_client", default=None)
-_client_lock: Optional[asyncio.Lock] = None
+_client_var: ContextVar[Optional[httpx.AsyncClient]] = ContextVar(
+    "notion_http_client", default=None
+)
+_client_lock_var: ContextVar[Optional[asyncio.Lock]] = ContextVar(
+    "notion_http_client_lock", default=None
+)
 _retryable_statuses = {408, 425, 429, 500, 502, 503, 504}
 _max_retries = 3
 _retry_backoff = 0.5
 
 
+def _get_lock(create: bool = True) -> Optional[asyncio.Lock]:
+    lock = _client_lock_var.get()
+    if lock is None and create:
+        lock = asyncio.Lock()
+        _client_lock_var.set(lock)
+    return lock
+
+
 async def _get_http_client() -> httpx.AsyncClient:
     """Return a shared AsyncClient instance, initialising it on demand."""
 
-    global _client_lock
-    if _client_lock is None:
-        _client_lock = asyncio.Lock()
+    lock = _get_lock()
+    assert lock is not None  # lock is created when missing
 
-    async with _client_lock:
+    async with lock:
         client = _client_var.get()
         if client is None or client.is_closed:
             client = httpx.AsyncClient(timeout=httpx.Timeout(15.0))
@@ -40,11 +51,19 @@ async def _get_http_client() -> httpx.AsyncClient:
 async def aclose_http_client() -> None:
     """Gracefully close the shared HTTP client."""
 
-    global _client_lock
-    if _client_lock is None:
-        _client_lock = asyncio.Lock()
+    lock = _get_lock(create=False)
+    if lock is None:
+        client = _client_var.get()
+        if client is None:
+            return
+        _client_var.set(None)
+        try:
+            await client.aclose()
+        except Exception:
+            logger.debug("Failed to close HTTP client during shutdown", exc_info=True)
+        return
 
-    async with _client_lock:
+    async with lock:
         client = _client_var.get()
         if client is None:
             return
@@ -258,15 +277,18 @@ async def _fetch_block_children(
 async def _invalidate_http_client() -> None:
     """Dispose of the shared HTTP client so the next request builds a fresh one."""
 
-    global _client_lock
-    if _client_lock is None:
-        _client_lock = asyncio.Lock()
-
-    async with _client_lock:
+    lock = _get_lock(create=False)
+    if lock is None:
         client = _client_var.get()
         if client is None:
             return
         _client_var.set(None)
+    else:
+        async with lock:
+            client = _client_var.get()
+            if client is None:
+                return
+            _client_var.set(None)
 
     try:
         await client.aclose()
