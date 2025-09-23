@@ -1,8 +1,6 @@
 import hashlib
 import hmac
-import json
 
-import pytest
 from fastapi import Request
 
 from app.config import settings

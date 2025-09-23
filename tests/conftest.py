@@ -1,10 +1,7 @@
-import json
 from datetime import datetime
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pytest_mock import MockFixture
 
 from app.config import settings
 from app.main import app

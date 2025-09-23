@@ -1,7 +1,6 @@
 import asyncio
 import hashlib
 import hmac
-import json
 import logging
 from threading import Lock
 from typing import Any, Dict, List, Optional

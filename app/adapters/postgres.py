@@ -1,12 +1,12 @@
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, Generic, List, Optional, Tuple, Type, TypeVar
+from typing import Any, Dict, List, Optional, Type, TypeVar
 
 import asyncpg
 
 from ..config import settings
-from ..models.entity import NotionDatabase, NotionEntity, NotionPage
+from ..models.entity import NotionEntity
 from .base import BaseAdapter
 
 # Configure logging
@@ -238,7 +238,7 @@ class PostgresAdapter(BaseAdapter[T]):
                 try:
                     if isinstance(row_dict[field], str):
                         row_dict[field] = datetime.fromisoformat(row_dict[field])
-                except:
+                except Exception:
                     # If conversion fails, use current time
                     row_dict[field] = datetime.utcnow()
 

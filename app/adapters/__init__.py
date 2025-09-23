@@ -1,7 +1,6 @@
 from typing import Optional
 
 from ..models.entity import NotionDatabase, NotionPage
-from .base import BaseAdapter
 
 try:
     from .content import ContentStoreAdapter

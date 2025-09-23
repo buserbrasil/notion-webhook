@@ -1,8 +1,6 @@
-import json
 from unittest.mock import patch
 
-import pytest
-from fastapi import HTTPException, status
+from fastapi import status
 
 from app.routers.webhooks import normalize_events
 
