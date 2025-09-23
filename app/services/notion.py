@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import hmac
 import logging
-from threading import Lock
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -15,19 +14,23 @@ logger = logging.getLogger(__name__)
 NOTION_API_URL = "https://api.notion.com/v1"
 
 _http_clients: Dict[int, httpx.AsyncClient] = {}
-_client_lock: Lock = Lock()
+_client_lock: Optional[asyncio.Lock] = None
 _retryable_statuses = {408, 425, 429, 500, 502, 503, 504}
 _max_retries = 3
 _retry_backoff = 0.5
 
 
-def _get_http_client() -> httpx.AsyncClient:
+async def _get_http_client() -> httpx.AsyncClient:
     """Return a shared AsyncClient instance, initialising it on demand."""
 
     loop = asyncio.get_running_loop()
     loop_id = id(loop)
 
-    with _client_lock:
+    global _client_lock
+    if _client_lock is None:
+        _client_lock = asyncio.Lock()
+
+    async with _client_lock:
         client = _http_clients.get(loop_id)
         if client is None or client.is_closed:
             client = httpx.AsyncClient(timeout=httpx.Timeout(15.0))
@@ -39,9 +42,14 @@ def _get_http_client() -> httpx.AsyncClient:
 async def aclose_http_client() -> None:
     """Gracefully close the shared HTTP client."""
 
-    clients: List[httpx.AsyncClient]
-    with _client_lock:
-        clients = list(_http_clients.values())
+    global _client_lock
+    if _client_lock is None:
+        _client_lock = asyncio.Lock()
+
+    async with _client_lock:
+        if not _http_clients:
+            return
+        clients: List[httpx.AsyncClient] = list(_http_clients.values())
         _http_clients.clear()
 
     for client in clients:
@@ -155,7 +163,7 @@ async def _request_with_retry(
     """Perform an HTTP request with exponential backoff on transient errors."""
 
     for attempt in range(_max_retries):
-        client = _get_http_client()
+        client = await _get_http_client()
         try:
             response = await client.request(
                 method,
@@ -256,7 +264,11 @@ async def _invalidate_http_client() -> None:
     loop = asyncio.get_running_loop()
     loop_id = id(loop)
 
-    with _client_lock:
+    global _client_lock
+    if _client_lock is None:
+        _client_lock = asyncio.Lock()
+
+    async with _client_lock:
         client = _http_clients.pop(loop_id, None)
 
     if client is None:
