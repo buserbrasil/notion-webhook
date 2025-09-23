@@ -17,14 +17,14 @@ This document captures the full context required to maintain, extend, or operate
 - **Webhook router (`app/routers/webhooks.py`)**
   - `/webhook/notion` accepts both verification payloads (containing `verification_token`) and event batches.
   - Normalizes the incoming payload (supports Notion v2025-09-03 event format with nested `items`/`events`).
-  - Validates request signatures via `NotionService.validate_webhook_signature` when a verification token is configured.
+  - Validates request signatures via `services.notion.validate_webhook_signature` when a verification token is configured.
   - For each normalized event:
     - Parses into `NotionEventPayload` (Pydantic model).
     - Fetches the latest entity snapshot and Markdown representation from Notion APIs.
-    - Persists the snapshot using `NotionService.save_entity`.
+    - Persists the snapshot using `services.notion.save_entity`.
     - Responds with a status message indicating success and, when available, the entity URL.
 
-- **Notion Service (`app/services/notion.py`)**
+- **Notion service module (`app/services/notion.py`)**
   - Provides core operations: signature validation, entity fetching, Markdown rendering, persistence, and schema initialization.
   - Fetches Notion entities using the configured API version (default `2022-06-28`, supports `2025-09-03`).
   - Enriches entity data with:
@@ -66,7 +66,7 @@ This document captures the full context required to maintain, extend, or operate
 
 ## 3. Markdown Rendering
 
-- `NotionService.blocks_to_markdown` iterates over block arrays and translates each block type into Markdown.
+- `services.notion.blocks_to_markdown` iterates over block arrays and translates each block type into Markdown.
 - Supports headings, lists, to-dos, quotes, callouts, code blocks, images (as links), bookmarks, toggles, etc.
 - Nested blocks are rendered recursively with indentation.
 - Highlights:

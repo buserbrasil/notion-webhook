@@ -6,20 +6,20 @@ import pytest
 from fastapi import Request
 
 from app.config import settings
-from app.services.notion import NotionService
+from app.services import notion
 
 
-class TestNotionService:
+class TestNotionModule:
     async def test_is_verification_request_true(self):
         """Test that a request with verification_token is identified as a verification request."""
         body = {"verification_token": "test_token"}
-        result = NotionService.is_verification_request(body)
+        result = notion.is_verification_request(body)
         assert result is True
 
     async def test_is_verification_request_false(self):
         """Test that a request without verification_token is not identified as a verification request."""
         body = {"event_type": "page.updated"}
-        result = NotionService.is_verification_request(body)
+        result = notion.is_verification_request(body)
         assert result is False
 
     async def test_validate_webhook_signature_no_token(self, mocker):
@@ -31,7 +31,7 @@ class TestNotionService:
         # Set empty token
         mocker.patch("app.services.notion.settings.NOTION_VERIFICATION_TOKEN", "")
 
-        result = await NotionService.validate_webhook_signature(mock_request, b"{}")
+        result = await notion.validate_webhook_signature(mock_request, b"{}")
         assert result is True
 
     async def test_validate_webhook_signature_no_header(self, mocker):
@@ -45,7 +45,7 @@ class TestNotionService:
             "app.services.notion.settings.NOTION_VERIFICATION_TOKEN", "test_token"
         )
 
-        result = await NotionService.validate_webhook_signature(mock_request, b"{}")
+        result = await notion.validate_webhook_signature(mock_request, b"{}")
         assert result is False
 
     async def test_validate_webhook_signature_valid(self, mocker):
@@ -67,7 +67,7 @@ class TestNotionService:
         )
 
         # Test the validation
-        result = await NotionService.validate_webhook_signature(mock_request, test_body)
+        result = await notion.validate_webhook_signature(mock_request, test_body)
         assert result is True
 
     async def test_validate_webhook_signature_invalid(self, mocker):
@@ -87,7 +87,7 @@ class TestNotionService:
         )
 
         # Test the validation
-        result = await NotionService.validate_webhook_signature(mock_request, test_body)
+        result = await notion.validate_webhook_signature(mock_request, test_body)
         assert result is False
 
     def test_blocks_to_markdown_paragraph(self):
@@ -113,7 +113,7 @@ class TestNotionService:
             }
         ]
 
-        markdown = NotionService.blocks_to_markdown(blocks)
+        markdown = notion.blocks_to_markdown(blocks)
         assert markdown == "**Hello**"
 
     async def test_ensure_content_storage_invokes_adapter(self, mocker):
@@ -122,7 +122,7 @@ class TestNotionService:
         mock_adapter.ensure_schema = mocker.AsyncMock()
         mocker.patch("app.services.notion.get_content_adapter", return_value=mock_adapter)
 
-        await NotionService.ensure_content_storage()
+        await notion.ensure_content_storage()
 
         mock_adapter.ensure_schema.assert_awaited_once()
 
@@ -133,7 +133,7 @@ class TestNotionService:
         get_adapter = mocker.patch("app.services.notion.get_content_adapter")
 
         try:
-            await NotionService.ensure_content_storage()
+            await notion.ensure_content_storage()
             get_adapter.assert_not_called()
         finally:
             monkeypatch.setattr(settings, "DB_HOST", original_host)

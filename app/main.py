@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .routers import webhooks
-from .services.notion import NotionService
+from .services import notion
 
 # Silence upcoming python-multipart import warning
 os.environ.setdefault("PYTHON_MULTIPART_SILENCE_DEPRECATION", "1")
@@ -28,7 +28,7 @@ async def lifespan(_: FastAPI):
 
     if settings.has_database_credentials:
         try:
-            await NotionService.ensure_content_storage()
+            await notion.ensure_content_storage()
         except Exception:
             # Exception already logged within ensure_content_storage
             raise
@@ -37,6 +37,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        await notion.aclose_http_client()
         logger.info("Shutting down %s", settings.APP_NAME)
 
 # Create FastAPI app

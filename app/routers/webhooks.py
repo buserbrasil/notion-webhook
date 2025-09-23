@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -9,7 +10,7 @@ from ..models.webhook import (
     NotionVerificationPayload,
     NotionWebhookResponse,
 )
-from ..services.notion import NotionService
+from ..services import notion
 
 NormalizedEvent = Tuple[Dict[str, Any], Dict[str, Any]]
 
@@ -155,7 +156,7 @@ async def handle_notion_event(
 
     try:
         if event.entity_type in {"page", "database"}:
-            entity_data = await NotionService.fetch_entity_data(
+            entity_data = await notion.fetch_entity_data(
                 entity_id=event.entity_id,
                 entity_type=event.entity_type,
                 event_metadata=raw_event,
@@ -178,7 +179,7 @@ async def handle_notion_event(
         )
 
     if entity_data:
-        persist_result = await NotionService.save_entity(
+        persist_result = await notion.save_entity(
             entity_id=event.entity_id,
             entity_type=event.entity_type,
             entity_data=entity_data,
@@ -205,9 +206,7 @@ def enqueue_event_processing(
     event: NotionEventPayload,
     raw_event: Optional[Dict[str, Any]] = None,
 ):
-    """Background task entry point executed by Starlette."""
-
-    import asyncio
+    """Schedule webhook handling without blocking the response lifecycle."""
 
     async def runner():
         try:
@@ -220,7 +219,12 @@ def enqueue_event_processing(
                 exc,
             )
 
-    asyncio.run(runner())
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(runner())
+    else:
+        loop.create_task(runner())
 
 
 @router.post("/notion", response_model=NotionWebhookResponse)
@@ -243,7 +247,7 @@ async def handle_notion_webhook(request: Request, background_tasks: BackgroundTa
         )
 
     # Handle verification request
-    if NotionService.is_verification_request(payload):
+    if notion.is_verification_request(payload):
         try:
             verification = NotionVerificationPayload(**payload)
         except Exception as exc:
@@ -266,7 +270,7 @@ async def handle_notion_webhook(request: Request, background_tasks: BackgroundTa
         )
 
     # Validate signature when a verification token is configured
-    is_valid_signature = await NotionService.validate_webhook_signature(request, body)
+    is_valid_signature = await notion.validate_webhook_signature(request, body)
     if not is_valid_signature:
         logger.warning("Invalid webhook signature")
         raise HTTPException(
