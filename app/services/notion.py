@@ -14,7 +14,7 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 NOTION_API_URL = "https://api.notion.com/v1"
 
-_http_client: Optional[httpx.AsyncClient] = None
+_http_clients: Dict[int, httpx.AsyncClient] = {}
 _client_lock: Lock = Lock()
 _retryable_statuses = {408, 425, 429, 500, 502, 503, 504}
 _max_retries = 3
@@ -24,17 +24,14 @@ _retry_backoff = 0.5
 def _get_http_client() -> httpx.AsyncClient:
     """Return a shared AsyncClient instance, initialising it on demand."""
 
-    global _http_client
-
-    client = _http_client
-    if client is not None and not client.is_closed:
-        return client
+    loop = asyncio.get_running_loop()
+    loop_id = id(loop)
 
     with _client_lock:
-        client = _http_client
+        client = _http_clients.get(loop_id)
         if client is None or client.is_closed:
-            _http_client = httpx.AsyncClient(timeout=httpx.Timeout(15.0))
-            client = _http_client
+            client = httpx.AsyncClient(timeout=httpx.Timeout(15.0))
+            _http_clients[loop_id] = client
 
     return client
 
@@ -42,16 +39,16 @@ def _get_http_client() -> httpx.AsyncClient:
 async def aclose_http_client() -> None:
     """Gracefully close the shared HTTP client."""
 
-    global _http_client
+    clients: List[httpx.AsyncClient]
+    with _client_lock:
+        clients = list(_http_clients.values())
+        _http_clients.clear()
 
-    client = _http_client
-    if client is None:
-        return
-
-    try:
-        await client.aclose()
-    finally:
-        _http_client = None
+    for client in clients:
+        try:
+            await client.aclose()
+        except Exception:
+            logger.debug("Failed to close HTTP client during shutdown", exc_info=True)
 
 
 async def validate_webhook_signature(request: Request, body: bytes) -> bool:
@@ -107,11 +104,8 @@ async def fetch_entity_data(
         "Content-Type": "application/json",
     }
 
-    client = _get_http_client()
-
     try:
         response = await _request_with_retry(
-            client,
             "GET",
             endpoint,
             headers=headers,
@@ -120,7 +114,7 @@ async def fetch_entity_data(
         entity = response.json()
 
         if entity_type == "page":
-            blocks = await _fetch_block_children(client, entity_id, headers)
+            blocks = await _fetch_block_children(entity_id, headers)
             entity["blocks"] = blocks
             entity["markdown"] = blocks_to_markdown(blocks)
             entity["title"] = extract_title(entity, "page")
@@ -151,7 +145,6 @@ async def fetch_entity_data(
 
 
 async def _request_with_retry(
-    client: httpx.AsyncClient,
     method: str,
     url: str,
     *,
@@ -162,6 +155,7 @@ async def _request_with_retry(
     """Perform an HTTP request with exponential backoff on transient errors."""
 
     for attempt in range(_max_retries):
+        client = _get_http_client()
         try:
             response = await client.request(
                 method,
@@ -190,9 +184,24 @@ async def _request_with_retry(
         except httpx.RequestError as exc:
             if attempt == _max_retries - 1:
                 raise
+            await _invalidate_http_client()
             sleep_for = _retry_backoff * (2**attempt)
             logger.warning(
                 "Retrying %s %s after network error %s (attempt %s/%s)",
+                method,
+                url,
+                exc,
+                attempt + 1,
+                _max_retries,
+            )
+            await asyncio.sleep(sleep_for)
+        except RuntimeError as exc:
+            if "handler is closed" not in str(exc) or attempt == _max_retries - 1:
+                raise
+            await _invalidate_http_client()
+            sleep_for = _retry_backoff * (2**attempt)
+            logger.warning(
+                "Retrying %s %s after runtime error %s (attempt %s/%s)",
                 method,
                 url,
                 exc,
@@ -205,7 +214,6 @@ async def _request_with_retry(
 
 
 async def _fetch_block_children(
-    client: httpx.AsyncClient,
     block_id: str,
     headers: Dict[str, str],
 ) -> List[Dict[str, Any]]:
@@ -220,7 +228,6 @@ async def _fetch_block_children(
             params["start_cursor"] = cursor
 
         response = await _request_with_retry(
-            client,
             "GET",
             f"{NOTION_API_URL}/blocks/{block_id}/children",
             headers=headers,
@@ -231,7 +238,7 @@ async def _fetch_block_children(
         for block in payload.get("results", []):
             if block.get("has_children"):
                 block["children"] = await _fetch_block_children(
-                    client, block["id"], headers
+                    block["id"], headers
                 )
             children.append(block)
 
@@ -241,6 +248,24 @@ async def _fetch_block_children(
         cursor = payload.get("next_cursor")
 
     return children
+
+
+async def _invalidate_http_client() -> None:
+    """Dispose of the shared HTTP client so the next request builds a fresh one."""
+
+    loop = asyncio.get_running_loop()
+    loop_id = id(loop)
+
+    with _client_lock:
+        client = _http_clients.pop(loop_id, None)
+
+    if client is None:
+        return
+
+    try:
+        await client.aclose()
+    except Exception:
+        logger.debug("Failed to close HTTP client during reset", exc_info=True)
 
 
 def blocks_to_markdown(blocks: List[Dict[str, Any]], indent_level: int = 0) -> str:
