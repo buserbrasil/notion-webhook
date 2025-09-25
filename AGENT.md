@@ -191,7 +191,14 @@ This document captures the full context required to maintain, extend, or operate
 
 ---
 
-## 9. Troubleshooting
+## 9. CI/CD Workflows
+
+- `tests.yml` runs linting (`ruff`) and unit/integration tests (with PostgreSQL service) on pushes to `main` and all pull requests.
+- `docker-publish.yml` builds the Docker image defined in `Dockerfile` and publishes it to `ghcr.io/buserbrasil/notion-webhook` for every push to `main` (tags `latest` and commit `sha`).
+
+---
+
+## 10. Troubleshooting
 
 - **Verification token missing**: Check webhook payloads and ensure the endpoint logs the token. Store it in `.env` to enable signature validation.
 - **Signature errors**: Confirm `NOTION_VERIFICATION_TOKEN` matches the token configured in Notion’s UI.
@@ -201,7 +208,7 @@ This document captures the full context required to maintain, extend, or operate
 
 ---
 
-## 10. Future Enhancements
+## 11. Future Enhancements
 
 - Add queued retry mechanism for persistence failures instead of logging only.
 - Introduce structured logging and metrics (e.g., OpenTelemetry).
