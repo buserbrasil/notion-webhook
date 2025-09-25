@@ -101,6 +101,9 @@ This document captures the full context required to maintain, extend, or operate
    - Each event triggers fetching, logging, and optional persistence.
    - Returns aggregated message summarizing processed events.
 
+- Background processing tasks keep strong references via `_BACKGROUND_TASKS`
+  to avoid premature garbage collection when scheduled with `asyncio.create_task`.
+
 4. **Error Handling**
    - Invalid JSON → `400` with detail message.
    - Invalid signature → `401`.

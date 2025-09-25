@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
@@ -126,6 +126,9 @@ def normalize_events(payload: Dict[str, Any]) -> List[NormalizedEvent]:
 # Configure logging
 logger = logging.getLogger(__name__)
 
+# Hold strong references to in-flight tasks to prevent premature GC.
+_BACKGROUND_TASKS: Set[asyncio.Task[Any]] = set()
+
 router = APIRouter(
     prefix="/webhook",
     tags=["webhook"],
@@ -224,7 +227,9 @@ def enqueue_event_processing(
     except RuntimeError:
         asyncio.run(runner())
     else:
-        loop.create_task(runner())
+        task = loop.create_task(runner())
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 @router.post("/notion", response_model=NotionWebhookResponse)
