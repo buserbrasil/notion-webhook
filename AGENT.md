@@ -36,7 +36,7 @@ This document captures the full context required to maintain, extend, or operate
 
 - **Adapters (`app/adapters/`)**
   - `content.py` implements `ContentStoreAdapter` using `pg8000` for pure-Python PostgreSQL access.
-    - Lazily ensures `notion_contents` table exists with columns: `id`, `entity_type`, `title`, `url`, `markdown`, `updated_at`.
+    - Lazily ensures `notion_contents` table exists with columns: `id`, `entity_type`, `title`, `url`, `markdown`, `breadcrumbs`, `updated_at`.
     - Upserts snapshots with `INSERT ... ON CONFLICT`.
   - `__init__.py` exposes `get_content_adapter()` as a singleton factory.
   - `postgres.py` (legacy) remains for future use but is currently unused.
@@ -58,9 +58,10 @@ This document captures the full context required to maintain, extend, or operate
 | `title`      | TEXT      | Extracted title (best effort)              |
 | `url`        | TEXT      | Notion URL (direct or synthesized)         |
 | `markdown`   | TEXT      | Markdown representation of the entity      |
+| `breadcrumbs`| TEXT      | JSON text with array of breadcrumb nodes   |
 | `updated_at` | TIMESTAMP | Automatically refreshed on every upsert    |
 
-> The adapter will create the table (and add the `title` column if missing) every time the app starts and detects configured DB credentials.
+> The adapter will create the table (and add the `title` and `breadcrumbs` columns if missing) every time the app starts and detects configured DB credentials.
 
 ---
 

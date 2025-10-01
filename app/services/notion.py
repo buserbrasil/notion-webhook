@@ -1,9 +1,10 @@
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 from contextvars import ContextVar
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import httpx
 from fastapi import Request
@@ -90,11 +91,14 @@ async def validate_webhook_signature(request: Request, body: bytes) -> bool:
         logger.warning("Missing %s header", "X-Notion-Signature")
         return False
 
-    expected_signature = "sha256=" + hmac.new(
-        token.encode("utf-8"),
-        body,
-        hashlib.sha256,
-    ).hexdigest()
+    expected_signature = (
+        "sha256="
+        + hmac.new(
+            token.encode("utf-8"),
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+    )
 
     return hmac.compare_digest(signature_header, expected_signature)
 
@@ -148,6 +152,19 @@ async def fetch_entity_data(
 
         if entity_type == "page" and "url" not in entity:
             entity["url"] = build_page_url(entity)
+
+        # Always compute breadcrumbs for persisted entities
+        try:
+            entity["breadcrumbs"] = await _build_breadcrumbs(
+                entity, entity_type, headers
+            )
+        except Exception as exc:
+            logger.debug(
+                "Failed to compute breadcrumbs for %s %s: %s",
+                entity_type,
+                entity_id,
+                exc,
+            )
 
         if event_metadata:
             entity.setdefault("event_metadata", event_metadata)
@@ -261,9 +278,7 @@ async def _fetch_block_children(
 
         for block in payload.get("results", []):
             if block.get("has_children"):
-                block["children"] = await _fetch_block_children(
-                    block["id"], headers
-                )
+                block["children"] = await _fetch_block_children(block["id"], headers)
             children.append(block)
 
         if not payload.get("has_more"):
@@ -331,7 +346,9 @@ def blocks_to_markdown(blocks: List[Dict[str, Any]], indent_level: int = 0) -> s
             if block_type == "to_do":
                 checked = "x" if content.get("checked") else " "
                 line = (
-                    f"{indent}- [{checked}] {text}" if text else f"{indent}- [{checked}]"
+                    f"{indent}- [{checked}] {text}"
+                    if text
+                    else f"{indent}- [{checked}]"
                 )
             elif block_type == "quote":
                 line = f"> {text}" if text else ">"
@@ -375,7 +392,8 @@ def blocks_to_markdown(blocks: List[Dict[str, Any]], indent_level: int = 0) -> s
         if children:
             child_markdown = blocks_to_markdown(
                 children,
-                indent_level=indent_level + (0 if block_type in {"quote", "code"} else 1),
+                indent_level=indent_level
+                + (0 if block_type in {"quote", "code"} else 1),
             )
             if child_markdown:
                 lines.append(child_markdown)
@@ -442,6 +460,82 @@ def build_page_url(page: Dict[str, Any]) -> Optional[str]:
     return f"{base_url}{without_hyphen}"
 
 
+async def _build_breadcrumbs(
+    entity: Dict[str, Any],
+    entity_type: str,
+    headers: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    """Build breadcrumb trail from root -> current entity.
+
+    Each breadcrumb item contains: {id, type, title, url}.
+    Stops when reaching a workspace parent.
+    """
+
+    def to_node(data: Dict[str, Any], type_hint: str) -> Dict[str, Any]:
+        node_id = data.get("id")
+        title = extract_title(data, "page" if type_hint == "page" else "database")
+        url = data.get("url")
+        if type_hint == "page" and not url:
+            url = build_page_url(data)
+        return {
+            "id": node_id,
+            "type": type_hint,
+            "title": title,
+            "url": url,
+        }
+
+    chain: List[Dict[str, Any]] = []
+
+    # Walk upwards from current entity to the root
+    current = entity
+    current_type = entity_type
+    seen: Set[str] = set()
+    depth_limit = 25
+
+    for _ in range(depth_limit):
+        node_id = current.get("id")
+        if isinstance(node_id, str):
+            if node_id in seen:
+                break
+            seen.add(node_id)
+
+        chain.append(to_node(current, current_type))
+
+        parent = current.get("parent")
+        if not isinstance(parent, dict):
+            break
+        if parent.get("workspace") is True:
+            break
+
+        next_type: Optional[str] = None
+        next_id: Optional[str] = None
+        if "page_id" in parent:
+            next_type = "page"
+            next_id = parent.get("page_id")
+        elif "database_id" in parent:
+            next_type = "database"
+            next_id = parent.get("database_id")
+
+        if not next_type or not next_id:
+            break
+
+        try:
+            response = await _request_with_retry(
+                "GET",
+                f"{NOTION_API_URL}/{next_type}s/{next_id}",
+                headers=headers,
+                params=None,
+            )
+            current = response.json()
+            current_type = next_type
+        except Exception:
+            break
+
+    # Reverse to make it root -> ... -> current
+    chain.reverse()
+    return chain
+
+
 async def ensure_content_storage() -> None:
     """Ensure the backing storage for content snapshots exists."""
 
@@ -477,8 +571,7 @@ def extract_title(data: Dict[str, Any], entity_type: str) -> str:
                     if value_type == "title":
                         fragments = value.get("title") or value.get("rich_text") or []
                         return "".join(
-                            fragment.get("plain_text", "")
-                            for fragment in fragments
+                            fragment.get("plain_text", "") for fragment in fragments
                         ).strip()
 
             title_field = data.get("title")
@@ -534,6 +627,13 @@ async def save_entity(
     markdown = entity_data.get("markdown") or ""
     url = entity_data.get("url")
     title = entity_data.get("title") or extract_title(entity_data, entity_type)
+    breadcrumbs = entity_data.get("breadcrumbs")
+    breadcrumbs_json: Optional[str] = None
+    try:
+        if isinstance(breadcrumbs, list):
+            breadcrumbs_json = json.dumps(breadcrumbs, ensure_ascii=False)
+    except Exception:
+        breadcrumbs_json = None
 
     try:
         adapter = get_content_adapter()
@@ -542,7 +642,14 @@ async def save_entity(
         return None
 
     try:
-        await adapter.upsert(entity_id, entity_type, url, markdown, title or "")
+        await adapter.upsert(
+            entity_id,
+            entity_type,
+            url,
+            markdown,
+            title or "",
+            breadcrumbs_json,
+        )
         logger.info("Stored content snapshot for %s %s", entity_type, entity_id)
         return True
     except Exception as exc:
