@@ -48,7 +48,11 @@ class ContentStoreAdapter:
             if self._created_connections < self._pool.maxsize:
                 conn = self._create_connection()
                 self._created_connections += 1
-                logger.debug("Created new content adapter connection (%s/%s)", self._created_connections, self._pool.maxsize)
+                logger.debug(
+                    "Created new content adapter connection (%s/%s)",
+                    self._created_connections,
+                    self._pool.maxsize,
+                )
                 return conn
 
         conn = self._pool.get()
@@ -101,10 +105,12 @@ class ContentStoreAdapter:
                 title TEXT,
                 url TEXT,
                 markdown TEXT,
+                breadcrumbs TEXT,
                 updated_at TIMESTAMP NOT NULL DEFAULT NOW()
             );
             """,
             "ALTER TABLE notion_contents ADD COLUMN IF NOT EXISTS title TEXT;",
+            "ALTER TABLE notion_contents ADD COLUMN IF NOT EXISTS breadcrumbs TEXT;",
         ]
 
         with self._borrow_connection() as conn:
@@ -119,10 +125,17 @@ class ContentStoreAdapter:
         url: Optional[str],
         markdown: str,
         title: Optional[str] = None,
+        breadcrumbs_json: Optional[str] = None,
     ) -> None:
         await self.ensure_schema()
         await asyncio.to_thread(
-            self._upsert_sync, notion_id, entity_type, url, markdown, title or ""
+            self._upsert_sync,
+            notion_id,
+            entity_type,
+            url,
+            markdown,
+            title or "",
+            breadcrumbs_json or None,
         )
 
     def _upsert_sync(
@@ -132,22 +145,37 @@ class ContentStoreAdapter:
         url: Optional[str],
         markdown: str,
         title: str,
+        breadcrumbs_json: Optional[str],
     ) -> None:
         query = """
-        INSERT INTO notion_contents (id, entity_type, title, url, markdown, updated_at)
-        VALUES (%s, %s, %s, %s, %s, NOW())
+        INSERT INTO notion_contents (
+            id, entity_type, title, url, markdown, breadcrumbs, updated_at
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, NOW()
+        )
         ON CONFLICT (id) DO UPDATE SET
             entity_type = EXCLUDED.entity_type,
             title = EXCLUDED.title,
             url = EXCLUDED.url,
             markdown = EXCLUDED.markdown,
+            breadcrumbs = EXCLUDED.breadcrumbs,
             updated_at = NOW();
         """
 
         conn = self._acquire_connection()
         try:
             with conn.cursor() as cursor:
-                cursor.execute(query, (notion_id, entity_type, title, url, markdown))
+                cursor.execute(
+                    query,
+                    (
+                        notion_id,
+                        entity_type,
+                        title,
+                        url,
+                        markdown,
+                        breadcrumbs_json,
+                    ),
+                )
         except Exception:
             self._release_connection(conn, discard=True)
             raise
