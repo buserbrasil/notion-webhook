@@ -155,45 +155,43 @@ class TestBreadcrumbs:
         # Map URLs to payloads
         NOTION_API_URL = "https://api.notion.com/v1"
 
-        def payload_for(url: str):
-            if url == f"{NOTION_API_URL}/pages/page-1":
-                return {
-                    "id": "page-1",
-                    "parent": {"page_id": "page-0"},
-                    "properties": {
-                        "title": {"type": "title", "title": [{"plain_text": "Child"}]}
-                    },
-                    "url": "https://www.notion.so/child",
-                }
-            if url == f"{NOTION_API_URL}/pages/page-0":
-                return {
-                    "id": "page-0",
-                    "parent": {"database_id": "db-1"},
-                    "properties": {
-                        "title": {"type": "title", "title": [{"plain_text": "Parent"}]}
-                    },
-                    "url": "https://www.notion.so/parent",
-                }
-            if url == f"{NOTION_API_URL}/databases/db-1":
-                return {
-                    "id": "db-1",
-                    "parent": {"workspace": True},
-                    "title": [{"plain_text": "RootDB"}],
-                    "url": "https://www.notion.so/db-1",
-                }
-            raise AssertionError(f"Unexpected URL requested: {url}")
-
-        class StubResponse:
-            def __init__(self, data):
-                self._data = data
-
-            def json(self):
-                return self._data
+        payloads = {
+            "/pages/page-1": {
+                "id": "page-1",
+                "parent": {"page_id": "page-0"},
+                "properties": {
+                    "title": {"type": "title", "title": [{"plain_text": "Child"}]}
+                },
+                "url": "https://www.notion.so/child",
+            },
+            "/pages/page-0": {
+                "id": "page-0",
+                "parent": {"database_id": "db-1"},
+                "properties": {
+                    "title": {"type": "title", "title": [{"plain_text": "Parent"}]}
+                },
+                "url": "https://www.notion.so/parent",
+            },
+            "/databases/db-1": {
+                "id": "db-1",
+                "parent": {"workspace": True},
+                "title": [{"plain_text": "RootDB"}],
+                "url": "https://www.notion.so/db-1",
+            },
+        }
 
         async def fake_request_with_retry(
-            method, url, *, headers=None, params=None, json_payload=None
+            method, url, **kwargs
         ):
-            return StubResponse(payload_for(url))
+            path = url.removeprefix(NOTION_API_URL)
+            try:
+                return mocker.MagicMock(json=lambda: payloads[path])
+            except KeyError:
+                raise AssertionError(f"Unexpected URL: {url}")
+
+        mocker.patch(
+            "app.services.notion._request_with_retry", new=fake_request_with_retry
+        )
 
         mocker.patch(
             "app.services.notion._request_with_retry", new=fake_request_with_retry
