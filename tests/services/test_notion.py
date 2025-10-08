@@ -180,9 +180,7 @@ class TestBreadcrumbs:
             },
         }
 
-        async def fake_request_with_retry(
-            method, url, **kwargs
-        ):
+        async def fake_request_with_retry(method, url, **kwargs):
             path = url.removeprefix(NOTION_API_URL)
             try:
                 return mocker.MagicMock(json=lambda: payloads[path])
@@ -197,8 +195,6 @@ class TestBreadcrumbs:
             "app.services.notion._request_with_retry", new=fake_request_with_retry
         )
 
-        from app.services import notion
-
         entity = await notion.fetch_entity_data(entity_id="page-1", entity_type="page")
         assert entity is not None
         assert "breadcrumbs" in entity
@@ -209,8 +205,6 @@ class TestBreadcrumbs:
 
     async def test_save_entity_persists_breadcrumbs_json(self, mocker):
         """Ensure save_entity serializes breadcrumbs and passes to adapter.upsert."""
-
-        from app.services import notion
 
         mock_adapter = mocker.Mock()
         mock_adapter.upsert = mocker.AsyncMock()
